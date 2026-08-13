@@ -30,6 +30,14 @@ export interface ComposerAttachment {
   previewUrl: string
 }
 
+/** Outcome of one browser-initiated draft polish request. */
+export type PolishOutcome =
+  | { readonly ok: true; readonly text: string }
+  | { readonly ok: false; readonly message: string }
+
+/** The rewrite modes the polish menu offers (mirrors the host's PolishMode). */
+export type PolishMode = 'basic' | 'enhanced' | 'expand'
+
 declare module '@deepseek-ai/dsh-client-ui-slots' {
   interface SlotMap {
     /**
@@ -516,6 +524,20 @@ export interface ComposerBarInjected {
    * Resolves admission: false = rejected/unmatched/transport failure.
    */
   command: ((line: string) => Promise<boolean>) | undefined
+  /**
+   * Rewrite one draft through the host's `polish/polish` Remote endpoint (the
+   * auxiliary generation rides the session's own model route; the conversation
+   * context is assembled Host-side from the session log — compaction summary
+   * plus recent messages — and the session log is never touched by the
+   * request). Absent with the session; the browser passes the live draft and
+   * the chosen mode.
+   * @param draft - draft text to rewrite.
+   * @param mode - basic grammar/word polish, enhanced restructure, or
+   *   context-grounded expansion.
+   * @param signal - caller cancellation (a newer run or unmount).
+   * @returns the rewritten text, or a displayable failure message.
+   */
+  polish: ((draft: string, mode: PolishMode, signal?: AbortSignal) => Promise<PolishOutcome>) | undefined
   /**
    * Registrant hooks compartment: the renderer binds these to
    * useNotices/useLexicon (static absent sources without a session — hook

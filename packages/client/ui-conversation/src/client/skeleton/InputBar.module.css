@@ -175,6 +175,27 @@
   color: var(--dsw-alias-state-warn-label);
 }
 
+/* Polish fade: while the auxiliary rewrite is in flight the draft scrollport
+   breathes — the whole input area (glyphs, placeholder, scrollbar) dips
+   toward translucent and back. Compositor-friendly opacity animation; the
+   read-only lock carries the semantics, the fade carries the busy signal.
+   Reduced-motion users keep the lock and lose only the pulse. */
+.polishFade {
+  animation: polish-fade 1.2s ease-in-out infinite;
+}
+
+@keyframes polish-fade {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .polishFade {
+    animation: none;
+    opacity: 0.7;
+  }
+}
+
 .hlSegment {
   border-radius: 4px;
   background-color: transparent;
@@ -342,6 +363,32 @@
 }
 
 .add:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* Draft polish (IconButton family, send-cluster seat): 28px circle beside the
+   primary send — selector fill + primary glyph like the attach circle, raised
+   to the send button's own seat so the pair reads as one cluster. */
+.polish {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 999px;
+  background: var(--dsw-specific-selector);
+  color: var(--dsw-alias-label-primary);
+  cursor: pointer;
+  transform: translateY(-2px);
+}
+
+.polish:hover:not(:disabled) {
+  background: var(--dsw-alias-interactive-bg-hover-solid);
+}
+
+.polish:disabled {
   opacity: 0.5;
   cursor: default;
 }

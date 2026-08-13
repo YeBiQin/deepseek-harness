@@ -80,6 +80,7 @@ interface BenchOptions {
   placeholder?: string
   t?: InputBarProps['t']
   command?: (line: string) => Promise<boolean>
+  polish?: InputBarProps['polish']
   accessory?: React.ReactNode
   overlay?: React.ReactNode
   leftItems?: React.ReactNode
@@ -177,6 +178,7 @@ function bench(over?: BenchOptions) {
     useMenuLauncher: bindSnapshotSelector(menuLauncher),
     stop,
     command: over?.command ?? (() => Promise.resolve(true)),
+    polish: over?.polish,
     // Mirrors the real lookup chain (conversation namespace, then common).
     t: over?.t ?? makeTranslate(zh, commonZh),
     renderSlot,
@@ -1322,5 +1324,193 @@ describe('command launcher chrome and control seats', () => {
     cleanup()
     const live = bench({ running: true, permissions })
     expect((live.view.getByLabelText(/^访问模式/) as HTMLButtonElement).disabled).toBe(false)
+  })
+})
+
+describe('draft polish', () => {
+  /** Open the polish mode menu and pick one mode (the menu is the only execute path). */
+  function runPolish(view: ReturnType<typeof bench>['view'], mode: '基础润色' | '强化润色' | '上下文扩写' = '基础润色'): void {
+    fireEvent.click(view.getByLabelText('润色'))
+    fireEvent.click(view.getByRole('menuitem', { name: mode }))
+  }
+
+  it('renders the polish button only when the face is provided; empty drafts disable it', () => {
+    const polish = vi.fn(() => Promise.resolve({ ok: true as const, text: 'x' }))
+    const { view } = bench({ polish })
+    const button = view.getByLabelText('润色') as HTMLButtonElement
+    expect(button.disabled).toBe(true)
+    expect(button.getAttribute('aria-label')).toBe('润色')
+    expect(button.getAttribute('aria-haspopup')).toBe('menu')
+    cleanup()
+    const bare = bench()
+    expect(bare.view.queryByLabelText('润色')).toBeNull()
+  })
+
+  it('hovering the button reveals the three-mode menu; picking enhanced ships that mode', async () => {
+    const polish = vi.fn<NonNullable<InputBarProps['polish']>>((_draft, _mode, _signal) =>
+      Promise.resolve({ ok: true as const, text: '强化后的内容' }))
+    const { view, shell } = bench({ polish, draft: 'draft' })
+    fireEvent.pointerEnter(view.getByLabelText('润色'))
+    const items = view.getAllByRole('menuitem').map(item => item.textContent)
+    expect(items).toEqual(['基础润色', '强化润色', '上下文扩写'])
+    fireEvent.click(view.getByRole('menuitem', { name: '强化润色' }))
+    await vi.waitFor(() => { expect(shell.snapshot.draft).toBe('强化后的内容') })
+    expect(polish.mock.calls[0]![0]).toBe('draft')
+    expect(polish.mock.calls[0]![1]).toBe('enhanced')
+  })
+
+  it('withholds the menu while the draft is empty (hover and click both refuse)', () => {
+    const polish = vi.fn()
+    const { view } = bench({ polish })
+    fireEvent.pointerEnter(view.getByLabelText('润色'))
+    expect(view.queryByRole('menuitem')).toBeNull()
+    fireEvent.click(view.getByLabelText('润色'))
+    expect(view.queryByRole('menuitem')).toBeNull()
+    expect(view.getByLabelText('润色').getAttribute('aria-expanded')).toBe('false')
+  })
+
+  it('ships the draft verbatim with the chosen mode (the host assembles the context) and replaces the draft on success', async () => {
+    const polish = vi.fn<NonNullable<InputBarProps['polish']>>((_draft, _mode, _signal) =>
+      Promise.resolve({ ok: true as const, text: '润色后的内容' }))
+    const { view, shell } = bench({ polish, draft: '  帮我 润色  ' })
+    runPolish(view)
+    await vi.waitFor(() => { expect(shell.snapshot.draft).toBe('润色后的内容') })
+    expect(polish).toHaveBeenCalledTimes(1)
+    // The machine draft travels verbatim; the host service trims it and
+    // assembles the conversation context from the session log.
+    expect(polish.mock.calls[0]![0]).toBe('  帮我 润色  ')
+    expect(polish.mock.calls[0]![1]).toBe('basic')
+    expect(polish.mock.calls[0]![2]).toBeInstanceOf(AbortSignal)
+    // The caret feed follows the replacement.
+    expect(shell.snapshot.phase).toBe('plain')
+  })
+
+  it('announces a rejected polish as a toast', async () => {
+    const polish = vi.fn(() => Promise.resolve({ ok: false as const, message: '模型路由不可用' }))
+    const { view } = bench({ polish, draft: 'draft' })
+    runPolish(view)
+    await vi.waitFor(() => { expect(view.getByRole('alert').textContent).toContain('模型路由不可用') })
+  })
+
+  it('does not clobber typing that landed during the flight', async () => {
+    let resolvePolish!: (outcome: { ok: true; text: string }) => void
+    const polish = vi.fn(() => new Promise<{ ok: true; text: string }>((resolve) => { resolvePolish = resolve }))
+    const { view, shell } = bench({ polish, draft: '原始草稿' })
+    runPolish(view)
+    act(() => { shell.setDraft('原始草稿 + 用户补写') })
+    act(() => { resolvePolish({ ok: true, text: '模型改写' }) })
+    await vi.waitFor(() => { expect(polish).toHaveBeenCalledTimes(1) })
+    expect(shell.snapshot.draft).toBe('原始草稿 + 用户补写')
+  })
+
+  it('refuses a click while busy and aborts the in-flight call on unmount', async () => {
+    const pending: Array<{ signal: AbortSignal; resolve: (outcome: { ok: true; text: string }) => void }> = []
+    const polish = vi.fn((_draft: string, _mode: string, signal?: AbortSignal) =>
+      new Promise<{ ok: true; text: string }>((resolve) => { pending.push({ signal: signal!, resolve }) }))
+    const { view } = bench({ polish, draft: 'draft' })
+    runPolish(view)
+    // Busy: the button disables (and shows the busy Tooltip), so a second
+    // click cannot start a second run.
+    expect((view.getByLabelText('润色') as HTMLButtonElement).disabled).toBe(true)
+    fireEvent.click(view.getByLabelText('润色'))
+    expect(polish).toHaveBeenCalledTimes(1)
+    // Unmount aborts the in-flight request (the only remaining cancel source).
+    view.unmount()
+    expect(pending[0]!.signal.aborted).toBe(true)
+  })
+
+  it('busy state disables the button until the flight settles', async () => {
+    let resolvePolish!: (outcome: { ok: true; text: string }) => void
+    const polish = vi.fn(() => new Promise<{ ok: true; text: string }>((resolve) => { resolvePolish = resolve }))
+    const { view, shell } = bench({ polish, draft: 'draft' })
+    runPolish(view)
+    const button = view.getByLabelText('润色') as HTMLButtonElement
+    expect(button.disabled).toBe(true)
+    act(() => { resolvePolish({ ok: true, text: 'done' }) })
+    // The rewrite lands in the draft immediately, but the lock holds for at
+    // least one full fade cycle after the response.
+    await vi.waitFor(() => { expect(shell.snapshot.draft).toBe('done') })
+    expect(button.disabled).toBe(true)
+    await vi.waitFor(() => { expect(button.disabled).toBe(false) }, { timeout: 3000 })
+  })
+
+  it('locks the composer while the rewrite is in flight: read-only box, disabled send, no submit', async () => {
+    let resolvePolish!: (outcome: { ok: true; text: string }) => void
+    const polish = vi.fn(() => new Promise<{ ok: true; text: string }>((resolve) => { resolvePolish = resolve }))
+    const { view, textarea, button, sink, shell } = bench({ polish, draft: 'draft text' })
+    runPolish(view)
+    // Read-only box: typing, paste, and Enter cannot touch the draft or submit.
+    expect(textarea.readOnly).toBe(true)
+    fireEvent.change(textarea, { target: { value: 'typed during polish' } })
+    expect(shell.snapshot.draft).toBe('draft text')
+    fireEvent.keyDown(textarea, { key: 'Enter' })
+    expect(sink).not.toHaveBeenCalled()
+    fireEvent.paste(textarea, { clipboardData: { items: [], getData: () => 'pasted' } })
+    expect(shell.snapshot.draft).toBe('draft text')
+    // The send button is disabled while polishing.
+    expect(button.disabled).toBe(true)
+    fireEvent.click(button)
+    expect(sink).not.toHaveBeenCalled()
+    // The input area carries the busy marker for the fade animation.
+    const scroll = view.container.querySelector('[data-input-scroll]')
+    expect(scroll?.getAttribute('data-polishing')).toBe('true')
+    // Settling writes the draft back immediately, but the lock and fade hold
+    // for the full minimum busy cycle.
+    act(() => { resolvePolish({ ok: true, text: '润色后' }) })
+    await vi.waitFor(() => { expect(shell.snapshot.draft).toBe('润色后') })
+    expect(textarea.readOnly).toBe(true)
+    expect(scroll?.getAttribute('data-polishing')).toBe('true')
+    await vi.waitFor(() => { expect(textarea.readOnly).toBe(false) }, { timeout: 3000 })
+    expect((view.getByLabelText('发送消息') as HTMLButtonElement).disabled).toBe(false)
+    expect(scroll?.hasAttribute('data-polishing')).toBe(false)
+  })
+
+  it('turns the button into one-shot undo after a rewrite; undo restores the original draft', async () => {
+    let resolvePolish!: (outcome: { ok: true; text: string }) => void
+    const polish = vi.fn(() => new Promise<{ ok: true; text: string }>((resolve) => { resolvePolish = resolve }))
+    const { view, shell } = bench({ polish, draft: '原始草稿' })
+    runPolish(view)
+    act(() => { resolvePolish({ ok: true, text: '润色后' }) })
+    await vi.waitFor(() => { expect(shell.snapshot.draft).toBe('润色后') })
+    // The polish seat flips to Undo (disabled until the busy lock releases).
+    await vi.waitFor(() => { expect(view.queryByLabelText('撤销润色')).not.toBeNull() }, { timeout: 3000 })
+    expect(view.queryByLabelText('润色')).toBeNull()
+    await vi.waitFor(() => {
+      expect((view.getByLabelText('撤销润色') as HTMLButtonElement).disabled).toBe(false)
+    }, { timeout: 3000 })
+    // Undo restores the original draft and revokes the temporary state.
+    fireEvent.click(view.getByLabelText('撤销润色'))
+    await vi.waitFor(() => { expect(shell.snapshot.draft).toBe('原始草稿') })
+    await vi.waitFor(() => { expect(view.queryByLabelText('润色')).not.toBeNull() }, { timeout: 3000 })
+    expect(view.queryByLabelText('撤销润色')).toBeNull()
+  })
+
+  it('revokes the undo when the user edits the draft after the rewrite', async () => {
+    let resolvePolish!: (outcome: { ok: true; text: string }) => void
+    const polish = vi.fn(() => new Promise<{ ok: true; text: string }>((resolve) => { resolvePolish = resolve }))
+    const { view, shell } = bench({ polish, draft: '原始草稿' })
+    runPolish(view)
+    act(() => { resolvePolish({ ok: true, text: '润色后' }) })
+    await vi.waitFor(() => { expect(shell.snapshot.draft).toBe('润色后') })
+    await vi.waitFor(() => { expect(view.queryByLabelText('撤销润色')).not.toBeNull() }, { timeout: 3000 })
+    // Typing takes the box over: the undo seat collapses back to Polish.
+    act(() => { shell.setDraft('润色后 + 补充') })
+    await vi.waitFor(() => { expect(view.queryByLabelText('润色')).not.toBeNull() }, { timeout: 3000 })
+    expect(view.queryByLabelText('撤销润色')).toBeNull()
+  })
+
+  it('revokes the undo when the session switches', async () => {
+    let resolvePolish!: (outcome: { ok: true; text: string }) => void
+    const polish = vi.fn(() => new Promise<{ ok: true; text: string }>((resolve) => { resolvePolish = resolve }))
+    const { view, props, shell } = bench({ polish, draft: '原始草稿' })
+    runPolish(view)
+    act(() => { resolvePolish({ ok: true, text: '润色后' }) })
+    await vi.waitFor(() => { expect(shell.snapshot.draft).toBe('润色后') })
+    await vi.waitFor(() => { expect(view.queryByLabelText('撤销润色')).not.toBeNull() }, { timeout: 3000 })
+    // Session switch (the composer DOM is reused across sessions): the
+    // temporary undo must not leak into the next session's machine.
+    view.rerender(<InputBar {...props} sessionId={'s2' as SessionId} />)
+    await vi.waitFor(() => { expect(view.queryByLabelText('润色')).not.toBeNull() }, { timeout: 3000 })
+    expect(view.queryByLabelText('撤销润色')).toBeNull()
   })
 })

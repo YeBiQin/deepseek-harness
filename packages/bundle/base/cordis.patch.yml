@@ -262,6 +262,24 @@
     - id: command-goal
       name: '@deepseek-ai/dsh-command-goal'
 
+    # Model-backed draft polishing for the composer bar: the Web composer's
+    # polish button calls the polish/polish Remote endpoint; the auxiliary
+    # generation rides the session's own model route, reuses the latest
+    # compaction summary plus the most recent messages as context, and never
+    # touches the session log.
+    - id: polish
+      name: '@deepseek-ai/dsh-polish'
+      config:
+        maxSummaryChars: 2000
+        maxRecentMessages: 20
+        maxLineChars: 2000
+        maxRecentChars: 8000
+        maxInputBytes: 16384
+        maxOutputTokens: 4096
+        timeoutMs: 30000
+
+
+
     - id: plan-mode
       name: '@deepseek-ai/dsh-plan-mode'
       config:

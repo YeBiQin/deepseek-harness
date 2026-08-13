@@ -77,6 +77,9 @@ const MEASURE_STYLE: CSSProperties = { visibility: 'hidden', left: 0, top: 0 }
  * gap and a brief overshoot survivable; coming back cancels the close.
  * @param props.dense - reduce vertical row spacing without changing the standard typography or card width.
  * @param props.compact - use reduced menu typography and spacing.
+ * @param props.fitWidth - shrink the list to its longest row instead of the
+ * design's fixed minimum card width (for short option sets where a wide card
+ * would look empty).
  * @param props.getAnchorRect - portal mode only: supply the anchor rect
  * directly (e.g. from a host-owned trigger button) instead of measuring the
  * Menu's own wrapper span. Required when the wrapper isn't itself laid out at
@@ -87,7 +90,7 @@ const MEASURE_STYLE: CSSProperties = { visibility: 'hidden', left: 0, top: 0 }
  * by a hairline; they stay visible while the items above scroll.
  * @returns anchor wrapper with the conditional list.
  */
-export function Menu({ open, anchor, items, selectedId, selectedIds, onSelect, onClose, align = 'start', side = 'bottom', portal = false, closeOnPointerLeave = false, dense = false, compact = false, getAnchorRect, footer, className }: {
+export function Menu({ open, anchor, items, selectedId, selectedIds, onSelect, onClose, align = 'start', side = 'bottom', portal = false, closeOnPointerLeave = false, dense = false, compact = false, fitWidth = false, getAnchorRect, footer, className }: {
   open: boolean
   anchor: ReactNode
   items: readonly MenuEntry[]
@@ -102,6 +105,7 @@ export function Menu({ open, anchor, items, selectedId, selectedIds, onSelect, o
   closeOnPointerLeave?: boolean
   dense?: boolean
   compact?: boolean
+  fitWidth?: boolean
   getAnchorRect?: () => DOMRect | null
   className?: string
 }) {
@@ -265,7 +269,7 @@ export function Menu({ open, anchor, items, selectedId, selectedIds, onSelect, o
   const list = open && (
     <div
       ref={listRef}
-      className={clsx(css.list, dense && css.denseList, compact && css.compactList, scrollable && css.scrollable, portal && css.portal, side === 'top' && !portal && css.sideTop, align === 'end' && !portal && css.alignEnd)}
+      className={clsx(css.list, dense && css.denseList, compact && css.compactList, fitWidth && css.fitWidth, scrollable && css.scrollable, portal && css.portal, side === 'top' && !portal && css.sideTop, align === 'end' && !portal && css.alignEnd)}
       style={portal ? fixedPos ?? MEASURE_STYLE : undefined}
       role="menu"
       // React portals bubble synthetic events through the REACT tree: without

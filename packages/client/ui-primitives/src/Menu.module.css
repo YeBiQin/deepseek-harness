@@ -36,6 +36,13 @@
   max-width: 360px;
 }
 
+/* Content-fit width for short option sets: the card shrinks to its longest
+ * row instead of the fixed design minimum. */
+.fitWidth {
+  width: max-content;
+  min-width: 0;
+}
+
 /* Portal mode: fixed in the viewport, coordinates supplied inline from the
  * anchor rect (side/align resolved in JS, the in-place offset rules above
  * don't apply). Portaled lists must layer above modal overlays (z 1000) —

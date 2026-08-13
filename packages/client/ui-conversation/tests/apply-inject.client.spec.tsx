@@ -18,6 +18,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { SlotTestRuntime, usePinnedBrowserLanguages, stubSettingsScope } from '@deepseek-ai/dsh-client-test-runtime'
 import type { SessionBehaviorOverrides } from '@deepseek-ai/dsh-client-test-runtime'
 import { LocaleRuntime } from '@deepseek-ai/dsh-client-locale/client'
+import type { ClientConnectionRpc } from '@deepseek-ai/dsh-client-connection/client'
 import type { ISession, SessionId } from '@deepseek-ai/dsh-client-runtime/client'
 import { apply, inject } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type {
@@ -47,7 +48,8 @@ function sessionFakeFor() {
 
 async function bench() {
   const runtime = await SlotTestRuntime.create()
-  runtime.provide('connection', { api: { settings: {} }, isLoopback: false })
+  const rpcCall = vi.fn<ClientConnectionRpc['call']>(() => Promise.resolve({ ok: true as const, value: null }))
+  runtime.provide('connection', { api: { settings: {} }, isLoopback: false, rpc: { call: rpcCall } })
   // The plugin injects both; these specs exercise no settings path.
   runtime.provide('remote', { $on: () => () => {} })
   runtime.provide('settingsScope', { bind: () => stubSettingsScope().scope } as never)
@@ -124,7 +126,7 @@ async function bench() {
   return {
     runtime, feature, slots: runtime.slots, entryOf,
     conversationApi, conversationHeaderApi, residentApi, composerApi, chatViewApi, inputApi,
-    sessionFake, layoutFake,
+    sessionFake, layoutFake, rpcCall,
   }
 }
 
@@ -331,6 +333,69 @@ describe('conversation slot inject API', () => {
     off()
     off2()
     unsub()
+    await b.runtime.dispose()
+  })
+})
+
+describe('draft polish inject face', () => {
+  it('routes the call through the shared /api channel and unwraps the nested service result', async () => {
+    const b = await bench()
+    const polish = b.composerApi(ROOT).polish!
+    expect(polish).toBeDefined()
+    b.rpcCall.mockResolvedValueOnce({
+      ok: true,
+      value: { ok: true, value: { text: '润色后的内容' } },
+    })
+    await expect(polish('草稿', 'basic')).resolves.toEqual({ ok: true, text: '润色后的内容' })
+    expect(b.rpcCall).toHaveBeenCalledWith(
+      '/api',
+      'polish/polish',
+      { args: { agentId: ROOT, draft: '草稿', mode: 'basic' } },
+      undefined,
+    )
+    await b.runtime.dispose()
+  })
+
+  it('forwards the chosen mode to the endpoint', async () => {
+    const b = await bench()
+    const polish = b.composerApi(ROOT).polish!
+    b.rpcCall.mockResolvedValueOnce({ ok: true, value: { ok: true, value: { text: '扩写' } } })
+    await expect(polish('草稿', 'expand')).resolves.toEqual({ ok: true, text: '扩写' })
+    expect(b.rpcCall).toHaveBeenCalledWith(
+      '/api',
+      'polish/polish',
+      { args: { agentId: ROOT, draft: '草稿', mode: 'expand' } },
+      undefined,
+    )
+    await b.runtime.dispose()
+  })
+
+  it('surfaces the service failure branch and the transport failure branch', async () => {
+    const b = await bench()
+    const polish = b.composerApi(ROOT).polish!
+    b.rpcCall.mockResolvedValueOnce({
+      ok: true,
+      value: { ok: false, error: { code: 'no-route', message: 'no model route is available', details: {} } },
+    })
+    await expect(polish('草稿', 'basic')).resolves.toEqual({ ok: false, message: 'no model route is available' })
+    b.rpcCall.mockResolvedValueOnce({ ok: false, error: { code: 'internal', message: 'transport down', details: {} } })
+    await expect(polish('草稿', 'basic')).resolves.toEqual({ ok: false, message: 'transport down' })
+    await b.runtime.dispose()
+  })
+
+  it('rejects a malformed service payload (flat text) with the invalid-result message', async () => {
+    const b = await bench()
+    const polish = b.composerApi(ROOT).polish!
+    // The success branch must nest the text under value.text; the flat-shape
+    // regression is exactly what broke the composer rewrite before this test.
+    b.rpcCall.mockResolvedValueOnce({ ok: true, value: { ok: true, text: 'flat' } })
+    await expect(polish('草稿', 'basic')).resolves.toEqual({ ok: false, message: 'polish service returned an invalid result' })
+    await b.runtime.dispose()
+  })
+
+  it('withholds the polish face without a session', async () => {
+    const b = await bench()
+    expect(b.composerApi(undefined).polish).toBeUndefined()
     await b.runtime.dispose()
   })
 })

@@ -10,8 +10,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ChangeEvent, KeyboardEvent, MouseEvent, ReactNode } from 'react'
 import clsx from 'clsx'
 import {
-  IconPlusOutline16, IconWarningOutline16, Toast, Tooltip,
+  IconPlusOutline16, IconWarningOutline16, Menu, Toast, Tooltip,
 } from '@deepseek-ai/dsh-client-ui-primitives'
+import type { MenuEntry } from '@deepseek-ai/dsh-client-ui-primitives'
 import { AttachmentRail, DropOverlay, ImageLightbox } from '@deepseek-ai/dsh-client-ui-attachment'
 import type { AttachmentRailItem } from '@deepseek-ai/dsh-client-ui-attachment'
 // Type-only: the `plan` projection key merge (the TodoDock posture — the
@@ -23,7 +24,7 @@ import type {} from '@deepseek-ai/dsh-goal/client'
 // wire types: apiproxy's sessions contract declares it, and client-runtime's
 // api-remotes import already places it in every client program.
 import type { Translate } from '@deepseek-ai/dsh-client-ui-slots'
-import type { ComposerAttachment, ComposerBarProps } from '../contract/slots.ts'
+import type { ComposerAttachment, ComposerBarProps, PolishMode } from '../contract/slots.ts'
 import { deriveDecorations } from '../input/decorations.ts'
 import type { DraftDecorations } from '../input/decorations.ts'
 import {
@@ -36,6 +37,17 @@ import css from './InputBar.module.css'
 /** Decoration product of the no-session state (no machine, empty draft). */
 const INERT_DECORATIONS: DraftDecorations = { token: null, chips: [], textRefs: [], hint: null }
 
+// ---- draft polish ----
+// The conversation context is assembled HOST-side from the session log
+// (compaction summary + recent messages); the browser ships only the draft.
+// After a successful rewrite the polish button turns into a one-shot undo
+// (temporary state): any edit of the draft, a session switch, or a page
+// reload clears it.
+
+/** The composer lock and fade hold at least this long — one full fade cycle —
+ *  so a fast model response still shows the complete state change. */
+const POLISH_LOCK_MIN_MS = 1200
+
 /** Rail thumbnail carrying its source attachment for the open/remove callbacks. */
 interface ComposerRailItem extends AttachmentRailItem {
   attachment: ComposerAttachment
@@ -45,7 +57,7 @@ export type InputBarProps = ComposerBarProps
 
 export function InputBar({
   useSession, useInput, inputActions, keyboard, addImages, removeImage, draftImages,
-  resolveSubmitMode, toggleCommandMenu, stop, command, t,
+  resolveSubmitMode, toggleCommandMenu, stop, command, polish, t,
   renderSlot, useNotices, useLexicon, useMenuLauncher,
   useProjection, sessionId, variant, disabled: inert = false, blocked,
   workspacePickerOpen = false, onRequestWorkspace,
@@ -85,6 +97,22 @@ export function InputBar({
     setToast({ seq: toastSeq.current, text })
   }, [])
   const dismissToast = useCallback(() => { setToast(null) }, [])
+  // Draft polish: the in-flight flag, the abort handle (unmount cancels), the
+  // hover/click menu open state, and the one-shot undo state — { original,
+  // polished } survives exactly until the user edits the draft, switches
+  // sessions, or reloads the page.
+  const [polishing, setPolishing] = useState(false)
+  const [polishMenuOpen, setPolishMenuOpen] = useState(false)
+  const [polishUndo, setPolishUndo] = useState<{ readonly original: string; readonly polished: string } | null>(null)
+  const polishAbortRef = useRef<AbortController | null>(null)
+  useEffect(() => () => { polishAbortRef.current?.abort() }, [])
+  // Any draft change not produced by the polish write itself revokes the undo:
+  // typing, undo/redo, external restore — the user took the box over.
+  useEffect(() => {
+    if (polishUndo !== null && draft !== polishUndo.polished) setPolishUndo(null)
+  }, [draft, polishUndo])
+  // Session switches revoke the undo (the machine is per-session).
+  useEffect(() => { setPolishUndo(null) }, [sessionId])
   // The deployment's image-intake limits (absent while no attachment service
   // is composed — the pre-check below then defers entirely to the host).
   const imageLimits = useProjection('imageLimits')
@@ -299,7 +327,7 @@ export function InputBar({
       // The machine owns the undo/redo log (chip transactions have semantics
       // the browser stack cannot represent); never let the native stack run.
       e.preventDefault()
-      if (machineBusy || locked) return
+      if (polishing || machineBusy || locked) return
       const redo = e.key === 'y' || e.shiftKey
       if (redo) keyboard.redo()
       else keyboard.undo()
@@ -321,7 +349,7 @@ export function InputBar({
     }
     e.preventDefault()
     if (e.repeat) return // held-down Enter must not machine-gun sends
-    if (locked || machineBusy) return
+    if (polishing || locked || machineBusy) return
     const accelerated = e.ctrlKey || e.metaKey
     // Empty-draft accelerated Enter acts on the queue instead of the (empty)
     // draft: the machine rejects empty drafts, so the gesture steers every
@@ -341,7 +369,7 @@ export function InputBar({
 
   const onChange = (e: ChangeEvent<HTMLTextAreaElement>): void => {
     if (keyboard === undefined || locked) return // disabled/read-only states cannot edit the draft
-    if (machineBusy) return // submitting is the read-only span; adjudicating holds the pending lock
+    if (polishing || machineBusy) return // polish and submit are read-only spans; adjudicating holds the pending lock
     const next = e.target.value
     keyboard.setDraft(next)
     // selectionStart is number|null in lib.dom; the type-aware lint program narrows it.
@@ -383,7 +411,7 @@ export function InputBar({
     }
     text += draft.slice(cursor, end)
     e.clipboardData.setData('text/plain', text)
-    if (cut && !machineBusy && !locked) {
+    if (cut && !polishing && !machineBusy && !locked) {
       keyboard.setDraft(draft.slice(0, start) + draft.slice(end), { start, end, insertedLength: 0 })
       restoreCaret(el, start)
     }
@@ -392,7 +420,7 @@ export function InputBar({
 
   const onPaste = (e: React.ClipboardEvent<HTMLTextAreaElement>): void => {
     if (keyboard === undefined) return // absent machine: no draft can accept a paste
-    if (machineBusy || locked) return
+    if (polishing || machineBusy || locked) return
     const files = Array.from(e.clipboardData.items)
       .filter(item => item.kind === 'file')
       .map(item => item.getAsFile())
@@ -455,7 +483,7 @@ export function InputBar({
   // Text drags carry no 'Files' type and pass through untouched, keeping the
   // native drop-text-into-textarea path. The overlay layer itself is
   // pointer-inert, so it never disturbs the enter/leave count.
-  const canAcceptDrop = !locked && !machineBusy && addImages !== undefined
+  const canAcceptDrop = !locked && !polishing && !machineBusy && addImages !== undefined
   useEffect(() => {
     const hasFiles = (event: globalThis.DragEvent): boolean =>
       event.dataTransfer?.types.includes('Files') ?? false
@@ -550,8 +578,63 @@ export function InputBar({
       return
     }
     if (inputActions === undefined) return // absent machine: the button is disabled
-    /* v8 ignore next -- defensive: the primary button is disabled while empty||disabled, so a click cannot reach the false arm. */
-    if (!empty && !disabled && !machineBusy) inputActions.submit()
+    /* v8 ignore next -- defensive: the primary button is disabled while empty||disabled||busy, so a click cannot reach the false arm. */
+    if (!empty && !disabled && !polishing && !machineBusy) inputActions.submit()
+  }
+
+  // Draft polish: ship the draft and the chosen mode to the host model route
+  // (the conversation context is assembled Host-side from the session log).
+  // The rewritten text replaces the draft ONLY while the user has not taken
+  // the box over during flight (the machine draft is the live authority); a
+  // newer run or an unmount aborts the in-flight call. A successful rewrite
+  // arms the one-shot undo — the button turns into Undo until the draft moves
+  // off the rewritten text, the session switches, or the page reloads. The
+  // lock (read-only box + fade) holds for at least one full fade cycle, so a
+  // fast model response still shows the complete state change.
+  const onPolish = async (mode: PolishMode): Promise<void> => {
+    if (polish === undefined || keyboard === undefined) return // absent machine: nothing to rewrite
+    if (polishing || locked || machineBusy) return
+    const baseline = keyboard.snapshot.draft
+    if (baseline.trim() === '') return
+    polishAbortRef.current?.abort()
+    const controller = new AbortController()
+    polishAbortRef.current = controller
+    const startedAt = Date.now()
+    setPolishing(true)
+    try {
+      const outcome = await polish(baseline, mode, controller.signal)
+      if (controller.signal.aborted) return // a newer run or an unmount owns the surface
+      if (outcome.ok) {
+        if (keyboard.snapshot.draft === baseline) {
+          keyboard.setDraft(outcome.text)
+          keyboard.track(outcome.text, outcome.text.length)
+          setPolishUndo({ original: baseline, polished: outcome.text })
+        }
+      } else {
+        showToast(outcome.message)
+      }
+    } catch (error: unknown) {
+      if (controller.signal.aborted) return
+      showToast(error instanceof Error ? error.message : String(error))
+    } finally {
+      if (polishAbortRef.current === controller) polishAbortRef.current = null
+      if (!controller.signal.aborted) {
+        const remaining = POLISH_LOCK_MIN_MS - (Date.now() - startedAt)
+        if (remaining > 0) await new Promise(resolve => setTimeout(resolve, remaining))
+      }
+      setPolishing(false)
+    }
+  }
+
+  // One-shot undo: restore the pre-polish draft through the machine and
+  // revoke the temporary state (the draft-change effect clears it too, since
+  // the restored text no longer equals the polished text).
+  const onPolishUndo = (): void => {
+    if (polishUndo === null || keyboard === undefined) return
+    if (locked || machineBusy || polishing) return
+    keyboard.setDraft(polishUndo.original)
+    keyboard.track(polishUndo.original, polishUndo.original.length)
+    setPolishUndo(null)
   }
 
   // The Access seat: the projection-fed permission chip (renders nothing
@@ -560,6 +643,14 @@ export function InputBar({
   const accessSelect: ReactNode = command === undefined
     ? null
     : <PermissionSelect key={sessionId} value={permissions} locked={locked} command={command} t={t} />
+
+  // The rewrite-mode menu (basic / enhanced / expand), offered on hover or
+  // click of the polish button.
+  const polishMenuItems: MenuEntry[] = [
+    { id: 'basic', label: t('input.polish.basic') },
+    { id: 'enhanced', label: t('input.polish.enhanced') },
+    { id: 'expand', label: t('input.polish.expand') },
+  ]
 
   // Mirror-layer decorations: a visible backdrop with transparent text. The
   // claim token highlights through behind the textarea glyphs; each U+FFFC
@@ -693,7 +784,12 @@ export function InputBar({
             glyphs to the backdrop, so they can only stay together by moving together: one scroll
             offset the browser applies to both layers at once, never a JS mirror between two boxes,
             which a compositor-driven gesture outruns and leaves the words trailing the caret. */}
-        <div ref={scrollRef} className={css.scroll} data-input-scroll>
+        <div
+          ref={scrollRef}
+          className={clsx(css.scroll, polishing && css.polishFade)}
+          data-input-scroll
+          data-polishing={polishing || undefined}
+        >
           <div className={css.grow}>
             <div aria-hidden className={css.backdrop} data-input-backdrop>{backdrop}</div>
             <textarea
@@ -701,7 +797,7 @@ export function InputBar({
               className={css.input}
               value={draft}
               disabled={textareaDisabled}
-              readOnly={machineBusy || workspaceTrigger}
+              readOnly={machineBusy || polishing || workspaceTrigger}
               aria-label={workspaceTrigger ? t('hero.chooseWorkspace') : undefined}
               aria-haspopup={workspaceTrigger ? 'menu' : undefined}
               aria-expanded={workspaceTrigger ? workspacePickerOpen : undefined}
@@ -723,6 +819,7 @@ export function InputBar({
               onCopy={(e) => { onCopyOrCut(e, false) }}
               onCut={(e) => { onCopyOrCut(e, true) }}
               onPaste={onPaste}
+              onDrop={polishing ? (e) => { e.preventDefault() } : undefined}
               onCompositionStart={onCompositionStart}
               onCompositionEnd={onCompositionEnd}
             />
@@ -755,6 +852,85 @@ export function InputBar({
             {rightItems}
             {renderSlot('conversation.input.model', { locked: modelSeatLocked })}
             <ContextMeter useProjection={useProjection} t={t} />
+            {polish !== undefined && (polishUndo !== null ? (
+              // One-shot undo: a successful rewrite turns the polish button
+              // into Undo until the draft moves, the session switches, or the
+              // page reloads.
+              <Tooltip label={t('input.polishUndo')} side="top" delayMs={500}>
+                <button
+                  type="button"
+                  className={css.polish}
+                  aria-label={t('input.polishUndo')}
+                  disabled={polishing || disabled || machineBusy}
+                  onMouseDown={keepFocus}
+                  onClick={onPolishUndo}
+                >
+                  <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden>
+                    <path d="M12.5 8c-2.65 0-5.05.99-6.9 2.6L2 7v9h9l-3.62-3.62c1.39-1.16 3.16-1.88 5.12-1.88 3.54 0 6.55 2.31 7.6 5.5l2.37-.78C21.08 11.03 17.15 8 12.5 8z" fill="currentColor" />
+                  </svg>
+                </button>
+              </Tooltip>
+            ) : polishing ? (
+              // Busy: no menu; the Tooltip carries the in-flight label and the
+              // lock + fade carry the state change.
+              <Tooltip label={t('input.polishBusy')} side="top" delayMs={500}>
+                <button
+                  type="button"
+                  className={css.polish}
+                  aria-label={t('input.polish')}
+                  disabled
+                  onMouseDown={keepFocus}
+                >
+                  <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden>
+                    <path d="M8 1.8c.3 1.6 1.2 2.6 2.7 2.9-1.5.4-2.4 1.3-2.7 2.9-.3-1.6-1.2-2.5-2.7-2.9 1.5-.3 2.4-1.3 2.7-2.9Z" fill="currentColor" />
+                    <path d="M13.2 8.6c.2 1 .8 1.6 1.8 1.8-1 .3-1.6.9-1.8 1.9-.2-1-.8-1.6-1.8-1.9 1-.2 1.6-.8 1.8-1.8Z" fill="currentColor" />
+                    <path d="M4.6 9.4c.2.9.7 1.4 1.6 1.6-.9.3-1.4.8-1.6 1.7-.2-.9-.7-1.4-1.6-1.7.9-.2 1.4-.7 1.6-1.6Z" fill="currentColor" />
+                  </svg>
+                </button>
+              </Tooltip>
+            ) : (
+              // Hover (or click) reveals the mode menu: basic / enhanced /
+              // expand. closeOnPointerLeave keeps the list attached to the
+              // trigger region, so aiming from button to item never closes it.
+              // An empty draft, a locked bar, or a busy machine withholds the
+              // menu entirely (the hover handler guards too, so the state
+              // never even arms).
+              <Menu
+                open={polishMenuOpen && !empty && !disabled && !machineBusy}
+                side="top"
+                align="end"
+                dense
+                fitWidth
+                closeOnPointerLeave
+                items={polishMenuItems}
+                onSelect={(id) => {
+                  setPolishMenuOpen(false)
+                  void onPolish(id as PolishMode)
+                }}
+                onClose={() => { setPolishMenuOpen(false) }}
+                anchor={
+                  <button
+                    type="button"
+                    className={css.polish}
+                    aria-label={t('input.polish')}
+                    aria-haspopup="menu"
+                    aria-expanded={polishMenuOpen && !empty && !disabled && !machineBusy}
+                    disabled={empty || disabled || machineBusy}
+                    onPointerEnter={() => {
+                      if (!empty && !disabled && !machineBusy) setPolishMenuOpen(true)
+                    }}
+                    onMouseDown={keepFocus}
+                    onClick={() => { setPolishMenuOpen(!polishMenuOpen) }}
+                  >
+                    <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden>
+                      <path d="M8 1.8c.3 1.6 1.2 2.6 2.7 2.9-1.5.4-2.4 1.3-2.7 2.9-.3-1.6-1.2-2.5-2.7-2.9 1.5-.3 2.4-1.3 2.7-2.9Z" fill="currentColor" />
+                      <path d="M13.2 8.6c.2 1 .8 1.6 1.8 1.8-1 .3-1.6.9-1.8 1.9-.2-1-.8-1.6-1.8-1.9 1-.2 1.6-.8 1.8-1.8Z" fill="currentColor" />
+                      <path d="M4.6 9.4c.2.9.7 1.4 1.6 1.6-.9.3-1.4.8-1.6 1.7-.2-.9-.7-1.4-1.6-1.7.9-.2 1.4-.7 1.6-1.6Z" fill="currentColor" />
+                    </svg>
+                  </button>
+                }
+              />
+            ))}
             {interruptible && (
               <Tooltip label={t('input.stop')} side="top" delayMs={500}>
                 <button
@@ -776,7 +952,7 @@ export function InputBar({
                 type="button"
                 className={css.primary}
                 aria-label={primaryLabel}
-                disabled={primaryStops ? stop === undefined : empty || disabled || machineBusy}
+                disabled={primaryStops ? stop === undefined : empty || disabled || polishing || machineBusy}
                 onMouseDown={keepFocus}
                 onClick={onPrimary}
               >

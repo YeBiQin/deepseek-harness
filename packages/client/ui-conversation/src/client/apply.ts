@@ -10,6 +10,7 @@ import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
 // Type-only: pulls the locale plugin's Context merge (ctx.locale).
 import type {} from '@deepseek-ai/dsh-client-locale/client'
+import type { ConnectionHandle } from '@deepseek-ai/dsh-client-connection/client'
 import type { ViewTab } from './contract/views.ts'
 import type {
   ApprovalWait, ChatNodeTurnDataInjected, ChatScrollPosition, ChatViewInjected, ComposerBarInjected,
@@ -297,6 +298,7 @@ export function apply(ctx: Context): void {
           toggleCommandMenu: undefined,
           stop: undefined,
           command: undefined,
+          polish: undefined,
           hooks: { notices: ABSENT_NOTICES, lexicon: ABSENT_LEXICON, menuLauncher: ABSENT_MENU_LAUNCHER },
         }
       }
@@ -350,6 +352,49 @@ export function apply(ctx: Context): void {
           if (session === undefined) return false
           const result = await session.command(line)
           return result.ok && result.value.matched
+        },
+        polish: async (draft, mode, signal) => {
+          // The shared /api RPC channel: the Host's Typert gateway resolves
+          // `polish/polish` against the mounted dsh-polish service (SRC
+          // fallback claims the @Remote endpoint; the agent lookup resolves
+          // the session id to its live Agent). The browser ships only the
+          // draft and the chosen mode — the conversation context is assembled
+          // Host-side from the session log, which is authoritative and never
+          // windowed by the client snapshot. Failures — transport, gateway,
+          // or the service's own explicit branch — all end in a displayable
+          // message for the composer toast. The connection face is optional
+          // (fixture/test runtimes mount none), so absence is a plain failure.
+          const connection = ctx.get('connection') as ConnectionHandle | undefined
+          if (connection === undefined) {
+            return { ok: false, message: 'polish is unavailable: no active connection' }
+          }
+          try {
+            const result = await connection.rpc.call(
+              '/api',
+              'polish/polish',
+              { args: { agentId: sessionId, draft, mode } },
+              signal,
+            )
+            if (!result.ok) return { ok: false, message: result.error.message }
+            // The RPC value is the service's own PolishResult union: the
+            // success branch nests the text under `value.text`.
+            const business = result.value as
+              | { ok?: unknown; value?: { text?: unknown }; error?: { message?: unknown } }
+              | null
+              | undefined
+            if (business?.ok === true && typeof business.value?.text === 'string') {
+              return { ok: true, text: business.value.text }
+            }
+            const message = business?.error?.message
+            return {
+              ok: false,
+              message: typeof message === 'string' && message.length > 0
+                ? message
+                : 'polish service returned an invalid result',
+            }
+          } catch (error: unknown) {
+            return { ok: false, message: error instanceof Error ? error.message : String(error) }
+          }
         },
         hooks: {
           notices: shell.notices,
