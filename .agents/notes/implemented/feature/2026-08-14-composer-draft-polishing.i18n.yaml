@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/feature/2026-08-14-composer-draft-polishing.md
-2026-08-14-composer-draft-polishing.md: 4afaf49434d78a679cedb4785f54306f66fcfa7b
-2026-08-14-composer-draft-polishing.zh.md: 696b418ae48e87bb72115951997eb527e2a5e5ec
+2026-08-14-composer-draft-polishing.md: 8b10e3ef83e2612f62ea7116ae3f1d0c50c3558f
+2026-08-14-composer-draft-polishing.zh.md: 929eb7dbd7477f30d8ab27471cf02a3167715580

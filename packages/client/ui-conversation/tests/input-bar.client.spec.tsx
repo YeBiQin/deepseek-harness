@@ -1431,7 +1431,11 @@ describe('draft polish', () => {
     // least one full fade cycle after the response.
     await vi.waitFor(() => { expect(shell.snapshot.draft).toBe('done') })
     expect(button.disabled).toBe(true)
-    await vi.waitFor(() => { expect(button.disabled).toBe(false) }, { timeout: 3000 })
+    // The busy arm is Tooltip-wrapped while the idle arm is Menu-wrapped, so
+    // the seat remounts when the lock releases: re-query the enabled button.
+    await vi.waitFor(() => {
+      expect((view.getByLabelText('润色') as HTMLButtonElement).disabled).toBe(false)
+    }, { timeout: 3000 })
   })
 
   it('locks the composer while the rewrite is in flight: read-only box, disabled send, no submit', async () => {
@@ -1465,52 +1469,23 @@ describe('draft polish', () => {
     expect(scroll?.hasAttribute('data-polishing')).toBe(false)
   })
 
-  it('turns the button into one-shot undo after a rewrite; undo restores the original draft', async () => {
+  it('keeps the polish seat after a rewrite: successive polishes chain on the rewritten draft', async () => {
     let resolvePolish!: (outcome: { ok: true; text: string }) => void
     const polish = vi.fn(() => new Promise<{ ok: true; text: string }>((resolve) => { resolvePolish = resolve }))
     const { view, shell } = bench({ polish, draft: '原始草稿' })
     runPolish(view)
     act(() => { resolvePolish({ ok: true, text: '润色后' }) })
     await vi.waitFor(() => { expect(shell.snapshot.draft).toBe('润色后') })
-    // The polish seat flips to Undo (disabled until the busy lock releases).
-    await vi.waitFor(() => { expect(view.queryByLabelText('撤销润色')).not.toBeNull() }, { timeout: 3000 })
-    expect(view.queryByLabelText('润色')).toBeNull()
+    // No undo seat exists: after the busy lock releases, the button is the
+    // polish button again (never an Undo), so a second polish chains on the
+    // rewritten draft.
     await vi.waitFor(() => {
-      expect((view.getByLabelText('撤销润色') as HTMLButtonElement).disabled).toBe(false)
+      const button = view.getByLabelText('润色') as HTMLButtonElement
+      expect(button.disabled).toBe(false)
     }, { timeout: 3000 })
-    // Undo restores the original draft and revokes the temporary state.
-    fireEvent.click(view.getByLabelText('撤销润色'))
-    await vi.waitFor(() => { expect(shell.snapshot.draft).toBe('原始草稿') })
-    await vi.waitFor(() => { expect(view.queryByLabelText('润色')).not.toBeNull() }, { timeout: 3000 })
     expect(view.queryByLabelText('撤销润色')).toBeNull()
-  })
-
-  it('revokes the undo when the user edits the draft after the rewrite', async () => {
-    let resolvePolish!: (outcome: { ok: true; text: string }) => void
-    const polish = vi.fn(() => new Promise<{ ok: true; text: string }>((resolve) => { resolvePolish = resolve }))
-    const { view, shell } = bench({ polish, draft: '原始草稿' })
     runPolish(view)
-    act(() => { resolvePolish({ ok: true, text: '润色后' }) })
-    await vi.waitFor(() => { expect(shell.snapshot.draft).toBe('润色后') })
-    await vi.waitFor(() => { expect(view.queryByLabelText('撤销润色')).not.toBeNull() }, { timeout: 3000 })
-    // Typing takes the box over: the undo seat collapses back to Polish.
-    act(() => { shell.setDraft('润色后 + 补充') })
-    await vi.waitFor(() => { expect(view.queryByLabelText('润色')).not.toBeNull() }, { timeout: 3000 })
-    expect(view.queryByLabelText('撤销润色')).toBeNull()
-  })
-
-  it('revokes the undo when the session switches', async () => {
-    let resolvePolish!: (outcome: { ok: true; text: string }) => void
-    const polish = vi.fn(() => new Promise<{ ok: true; text: string }>((resolve) => { resolvePolish = resolve }))
-    const { view, props, shell } = bench({ polish, draft: '原始草稿' })
-    runPolish(view)
-    act(() => { resolvePolish({ ok: true, text: '润色后' }) })
-    await vi.waitFor(() => { expect(shell.snapshot.draft).toBe('润色后') })
-    await vi.waitFor(() => { expect(view.queryByLabelText('撤销润色')).not.toBeNull() }, { timeout: 3000 })
-    // Session switch (the composer DOM is reused across sessions): the
-    // temporary undo must not leak into the next session's machine.
-    view.rerender(<InputBar {...props} sessionId={'s2' as SessionId} />)
-    await vi.waitFor(() => { expect(view.queryByLabelText('润色')).not.toBeNull() }, { timeout: 3000 })
-    expect(view.queryByLabelText('撤销润色')).toBeNull()
+    await vi.waitFor(() => { expect(polish).toHaveBeenCalledTimes(2) })
+    expect(polish).toHaveBeenLastCalledWith('润色后', 'basic', expect.any(AbortSignal))
   })
 })

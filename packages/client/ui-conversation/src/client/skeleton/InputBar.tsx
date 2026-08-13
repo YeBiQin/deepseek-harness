@@ -40,9 +40,8 @@ const INERT_DECORATIONS: DraftDecorations = { token: null, chips: [], textRefs: 
 // ---- draft polish ----
 // The conversation context is assembled HOST-side from the session log
 // (compaction summary + recent messages); the browser ships only the draft.
-// After a successful rewrite the polish button turns into a one-shot undo
-// (temporary state): any edit of the draft, a session switch, or a page
-// reload clears it.
+// Reverting a rewrite is the input machine's native undo history: the polish
+// seat never turns into a separate undo state, so successive polishes chain.
 
 /** The composer lock and fade hold at least this long — one full fade cycle —
  *  so a fast model response still shows the complete state change. */
@@ -97,22 +96,13 @@ export function InputBar({
     setToast({ seq: toastSeq.current, text })
   }, [])
   const dismissToast = useCallback(() => { setToast(null) }, [])
-  // Draft polish: the in-flight flag, the abort handle (unmount cancels), the
-  // hover/click menu open state, and the one-shot undo state — { original,
-  // polished } survives exactly until the user edits the draft, switches
-  // sessions, or reloads the page.
+  // Draft polish: the in-flight flag, the abort handle (unmount cancels), and
+  // the hover/click menu open state. Reverting a rewrite is the input
+  // machine's native undo history, so no undo seat exists here.
   const [polishing, setPolishing] = useState(false)
   const [polishMenuOpen, setPolishMenuOpen] = useState(false)
-  const [polishUndo, setPolishUndo] = useState<{ readonly original: string; readonly polished: string } | null>(null)
   const polishAbortRef = useRef<AbortController | null>(null)
   useEffect(() => () => { polishAbortRef.current?.abort() }, [])
-  // Any draft change not produced by the polish write itself revokes the undo:
-  // typing, undo/redo, external restore — the user took the box over.
-  useEffect(() => {
-    if (polishUndo !== null && draft !== polishUndo.polished) setPolishUndo(null)
-  }, [draft, polishUndo])
-  // Session switches revoke the undo (the machine is per-session).
-  useEffect(() => { setPolishUndo(null) }, [sessionId])
   // The deployment's image-intake limits (absent while no attachment service
   // is composed — the pre-check below then defers entirely to the host).
   const imageLimits = useProjection('imageLimits')
@@ -586,11 +576,10 @@ export function InputBar({
   // (the conversation context is assembled Host-side from the session log).
   // The rewritten text replaces the draft ONLY while the user has not taken
   // the box over during flight (the machine draft is the live authority); a
-  // newer run or an unmount aborts the in-flight call. A successful rewrite
-  // arms the one-shot undo — the button turns into Undo until the draft moves
-  // off the rewritten text, the session switches, or the page reloads. The
-  // lock (read-only box + fade) holds for at least one full fade cycle, so a
-  // fast model response still shows the complete state change.
+  // newer run or an unmount aborts the in-flight call. Successive polishes
+  // chain directly: reverting a rewrite is the input machine's native undo
+  // history. The lock (read-only box + fade) holds for at least one full fade
+  // cycle, so a fast model response still shows the complete state change.
   const onPolish = async (mode: PolishMode): Promise<void> => {
     if (polish === undefined || keyboard === undefined) return // absent machine: nothing to rewrite
     if (polishing || locked || machineBusy) return
@@ -608,7 +597,6 @@ export function InputBar({
         if (keyboard.snapshot.draft === baseline) {
           keyboard.setDraft(outcome.text)
           keyboard.track(outcome.text, outcome.text.length)
-          setPolishUndo({ original: baseline, polished: outcome.text })
         }
       } else {
         showToast(outcome.message)
@@ -624,17 +612,6 @@ export function InputBar({
       }
       setPolishing(false)
     }
-  }
-
-  // One-shot undo: restore the pre-polish draft through the machine and
-  // revoke the temporary state (the draft-change effect clears it too, since
-  // the restored text no longer equals the polished text).
-  const onPolishUndo = (): void => {
-    if (polishUndo === null || keyboard === undefined) return
-    if (locked || machineBusy || polishing) return
-    keyboard.setDraft(polishUndo.original)
-    keyboard.track(polishUndo.original, polishUndo.original.length)
-    setPolishUndo(null)
   }
 
   // The Access seat: the projection-fed permission chip (renders nothing
@@ -852,25 +829,7 @@ export function InputBar({
             {rightItems}
             {renderSlot('conversation.input.model', { locked: modelSeatLocked })}
             <ContextMeter useProjection={useProjection} t={t} />
-            {polish !== undefined && (polishUndo !== null ? (
-              // One-shot undo: a successful rewrite turns the polish button
-              // into Undo until the draft moves, the session switches, or the
-              // page reloads.
-              <Tooltip label={t('input.polishUndo')} side="top" delayMs={500}>
-                <button
-                  type="button"
-                  className={css.polish}
-                  aria-label={t('input.polishUndo')}
-                  disabled={polishing || disabled || machineBusy}
-                  onMouseDown={keepFocus}
-                  onClick={onPolishUndo}
-                >
-                  <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden>
-                    <path d="M12.5 8c-2.65 0-5.05.99-6.9 2.6L2 7v9h9l-3.62-3.62c1.39-1.16 3.16-1.88 5.12-1.88 3.54 0 6.55 2.31 7.6 5.5l2.37-.78C21.08 11.03 17.15 8 12.5 8z" fill="currentColor" />
-                  </svg>
-                </button>
-              </Tooltip>
-            ) : polishing ? (
+            {polish !== undefined && (polishing ? (
               // Busy: no menu; the Tooltip carries the in-flight label and the
               // lock + fade carry the state change.
               <Tooltip label={t('input.polishBusy')} side="top" delayMs={500}>

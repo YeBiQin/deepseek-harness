@@ -20,7 +20,7 @@ Composer drafts could only be edited by hand: there was no model-backed rewritin
 
 **A polish never touches the session log.** Nothing is appended, so no title generation, checkpoint, or transcript entry occurs; the main conversation's context and KV cache are unaffected.
 
-**The composer integrates the rewrite as a guarded draft mutation.** The injected `polish` slot on `ComposerBarInjected` ships the live draft and the chosen mode. The polish button opens a mode menu (the new ui-primitives `Menu` `fitWidth` prop keeps the card sized to its short option set) and shows a busy lock — the box is read-only with a fade that holds at least one full fade cycle (`POLISH_LOCK_MIN_MS` 1200). A newer run or an unmount aborts the in-flight call; a successful rewrite replaces the draft only while the user has not taken the box over, and arms a one-shot undo (`{ original, polished }`) revoked by any manual draft edit, a session switch, or a page reload.
+**The composer integrates the rewrite as a guarded draft mutation.** The injected `polish` slot on `ComposerBarInjected` ships the live draft and the chosen mode. The polish button opens a mode menu (the new ui-primitives `Menu` `fitWidth` prop keeps the card sized to its short option set) and shows a busy lock — the box is read-only with a fade that holds at least one full fade cycle (`POLISH_LOCK_MIN_MS` 1200). A newer run or an unmount aborts the in-flight call; a successful rewrite replaces the draft only while the user has not taken the box over. The seat never turns into an undo state: reverting a rewrite is the input machine's native undo history, and successive polishes chain directly ([removal note](../simplification/2026-08-14-remove-polish-undo.md)).
 
 ## Alternatives considered
 
@@ -34,7 +34,7 @@ Composer drafts could only be edited by hand: there was no model-backed rewritin
 
 ## Consequences
 
-Auxiliary token spend accrues on the session's own model route, capped by `maxOutputTokens`; subsequent turns see no context or cache difference. The composer locks the box during a polish, replaces the draft only if the user has not taken over, and offers one-shot undo. Failures are explicit and displayable, including the bounded-input and no-route cases. The package is optional for compositions without the Web composer. Known limits: single-shot rewrite, a bounded context window (older history beyond the latest compaction summary is out of scope), and no server-side caching of the draft or assembled context.
+Auxiliary token spend accrues on the session's own model route, capped by `maxOutputTokens`; subsequent turns see no context or cache difference. The composer locks the box during a polish, replaces the draft only if the user has not taken over, and leaves reverting a rewrite to the input machine's native undo history ([removal note](../simplification/2026-08-14-remove-polish-undo.md)). Failures are explicit and displayable, including the bounded-input and no-route cases. The package is optional for compositions without the Web composer. Known limits: single-shot rewrite, a bounded context window (older history beyond the latest compaction summary is out of scope), and no server-side caching of the draft or assembled context.
 
 ## Related
 
