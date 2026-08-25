@@ -53,6 +53,7 @@
 ## Existing guide
 
 - [`harness-learning-guide.md`](harness-learning-guide.md) 从基础概念、启动链路和 Agent Loop 开始，逐步进入能力扩展、测试和社区贡献。
+- [`course/README.md`](course/README.md) 是完整连续课程的总目录，串联六个基础模块、四篇开发练习和九个高级专题。
 - [`module-1-global-and-cordis.md`](module-1-global-and-cordis.md) 是第一模块，只讲全局认知、启动流和 Cordis 插件模型。
 - [`module-2-plugin-lifecycle.md`](module-2-plugin-lifecycle.md) 是第二模块，讲插件依赖、Service、Event、Effect 和卸载清理。
 - [`module-3-agent-turn.md`](module-3-agent-turn.md) 是第三模块，沿着 Inbox、Driver、Turn、Step、模型请求和工具结果追踪一次 Agent 工作单。
@@ -61,3 +62,7 @@
 - [`module-6-multi-entry-and-output.md`](module-6-multi-entry-and-output.md) 是第六模块，讲 Web、Headless、ACP、SDK 的共享核心、测试分层、知识沉淀和贡献路径。
 - [`harness-deep-dive-explained.md`](harness-deep-dive-explained.md) 是六个模块的综合参考，可配合各模块查阅。
 - [`develop-study/README.md`](develop-study/README.md) 是面向初学者的开发教程，按插件、工具、配置和 Bundle 安装组织可运行练习。
+
+## Advanced course
+
+`course/` 中的高级课程按当前能力缝隙拆分为独立文章：审批与权限预设、沙箱与后台任务、一次性和可继续子 Agent、压缩、Workflow、Agent Preset，以及明确标记为实验性的 Agent Teams。每篇文章都有前置知识、调用链、练习、聚焦验证命令和权威来源；不要把它们合并回一篇泛化的“高级功能总览”。

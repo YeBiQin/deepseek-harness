@@ -8,6 +8,8 @@
 
 本指南只描述当前仓库中已经存在的结构和扩展点；后续功能规划统一放在 [`../features/README.md`](../features/README.md)。
 
+如果需要按课程完成全部主题，请转到[DeepSeek Harness 完整课程](course/README.md)。本指南保留为全局导览；课程目录将权限、沙箱、子 Agent、压缩、Workflow、Preset 和实验性 Agent Teams 拆成连续的专题文章。
+
 ## 2. 先建立全局认知
 
 ### 2.1 项目定位

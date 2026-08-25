@@ -12,6 +12,7 @@
 ## Current documents
 
 - [`system/harness-learning-guide.md`](system/harness-learning-guide.md) 面向初学者的 DeepSeek Harness 学习与源码梳理指南。
+- [`system/course/README.md`](system/course/README.md) 完整连续课程：基础主线、开发实践和高级运行时专题。
 - [`system/module-1-global-and-cordis.md`](system/module-1-global-and-cordis.md) 第一模块：全局认知、启动流和 Cordis 插件模型。
 - [`system/module-2-plugin-lifecycle.md`](system/module-2-plugin-lifecycle.md) 第二模块：插件依赖、Service、Event、Effect 和卸载清理。
 - [`system/module-3-agent-turn.md`](system/module-3-agent-turn.md) 第三模块：Inbox、Driver、Turn、Step、模型请求和工具结果。
